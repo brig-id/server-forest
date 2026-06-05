@@ -19,3 +19,27 @@ and multi-server orchestration is stable.
 - Distributed trust anchors
 
 Do not add product code to this repository at this stage.
+
+## Commit conventions
+
+Format: `type(scope): <emoji> description`
+
+| Type | Emoji | When |
+| --- | --- | --- |
+| `feat` | ✨ | New feature |
+| `fix` | 🐛 | Bug fix |
+| `docs` | 📝 | Documentation only |
+| `chore` | 🔧 | Maintenance, config |
+| `ci` | 👷 | CI/CD |
+| `revert` | ⏪ | Reverts a previous commit |
+
+### Allowed scopes
+
+| Scope | Maps to |
+| --- | --- |
+| `forest` | Top-level binary or federation logic |
+| `ci` | `.github/workflows/` |
+| `deps` | Dependency bumps |
+
+**Do not use a scope outside this list.** Update this table and `.vscode/settings.json`
+when implementation begins.
