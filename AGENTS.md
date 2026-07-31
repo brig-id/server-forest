@@ -17,6 +17,9 @@ and multi-server orchestration is stable.
 - Cross-server DID resolution
 - OIDC Federation (OpenID Connect Federation 1.0)
 - Distributed trust anchors
+- Serving the `web` UI — same static-dist mechanism as `server-leaf`
+  (`ui_dist_dir`/SPA fallback), unless a CDN in front of the federation
+  makes more sense at this tier; not decided yet
 
 Do not add product code to this repository at this stage.
 
