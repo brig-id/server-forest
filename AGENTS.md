@@ -1,6 +1,7 @@
 # AGENTS.md — brig·id `server-forest`
 
-This repository is a **placeholder** for the future global federation layer.
+This repository is the **largest edition** of the brig·id server: for a company, on
+several nodes. It holds no code yet, and it is private for now.
 
 ## Language
 
@@ -8,20 +9,25 @@ This repository is a **placeholder** for the future global federation layer.
 
 ## Status
 
-Not started. No implementation work should happen here until `server-grove` is complete
-and multi-server orchestration is stable.
+Not started. In v1 forest is **designed, not built** (step 3): what it is is in
+`brig-id/spec`, [`editions.md`](https://github.com/brig-id/spec/blob/main/editions.md) §2
+and §4; read it before writing anything here.
 
-## Planned scope (future)
+## What is decided
 
-- Global identity federation across independent brig·id deployments
-- Cross-server DID resolution
-- OIDC Federation (OpenID Connect Federation 1.0)
-- Distributed trust anchors
-- Serving the `web` UI — same static-dist mechanism as `server-leaf`
-  (`ui_dist_dir`/SPA fallback), unless a CDN in front of the federation
-  makes more sense at this tier; not decided yet
-
-Do not add product code to this repository at this stage.
+- Several **stateless nodes**: no single point of failure, rolling updates without
+  interruption, inside the infrastructure a company already runs (a cluster, its secret
+  manager, its ingress).
+- What must leave a node's memory to get there is listed in `editions.md` §4: passkey
+  ceremonies in progress, sign-in requests of applications and their codes, rate limits.
+- **Where the state goes is open** until the design: PostgreSQL alone is the hypothesis to
+  test, on measurements. State in an encrypted cookie is already rejected.
+- It is **not** a federation of servers: accounts and identities are never linked across
+  servers (`model.md` §8).
+- A security fix reaches the three editions: what protects an account lives in `core`
+  and `crypto`, never here.
+- Settings under the common prefix `BRIGID_…`; licence AGPL-3.0-or-later, like the two
+  other editions. There is no commercial licence.
 
 ## Commit conventions
 
