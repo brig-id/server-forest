@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "dev/*"]
+  pull_request:
+    branches: [main, "dev/*"]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # The measuring tool: formatted, without warnings, its tests green.
+    uses: brig-id/.github/.github/workflows/ci-rust.yml@9b4836cc447175b4345957d92c769d1774e36299
+    with:
+      working-directory: bench
+
+  bench-runs:
+    # The tool still does what it says: against a small database, each place
+    # the shared state can live answers every request and loses nothing.
+    # The figures of a hosted runner mean nothing and are not kept.
+    name: The bench runs (PostgreSQL, cache)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: forest
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      cache:
+        image: valkey/valkey:8
+        ports: ["6379:6379"]
+    env:
+      BENCH_DATABASE_URL: postgres://postgres:bench@localhost:5432/forest
+      BENCH_CACHE_URL: redis://localhost:6379/
+      PGPASSWORD: bench
+    defaults:
+      run:
+        working-directory: bench
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-08-05
+        with:
+          toolchain: stable
+
+      - name: Fill a small database
+        run: |
+          psql -q -h localhost -U postgres -d forest -v ON_ERROR_STOP=1 -f schema.sql
+          psql -q -h localhost -U postgres -d forest -v ON_ERROR_STOP=1 -v accounts=2000 -f fill.sql
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Each place for the shared state answers every request
+        run: |
+          for ephemeral in logged unlogged cache; do
+            for touch in always coarse; do
+              cargo run --release --quiet -- --accounts 2000 --scale 0.1 \
+                --seconds 10 --warmup 2 --connections 8 \
+                --ephemeral "$ephemeral" --touch "$touch"
+            done
+          done
