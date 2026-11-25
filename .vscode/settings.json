@@ -2,9 +2,11 @@
   "conventionalCommits.gitmoji": true,
   "conventionalCommits.scopes": [
     "forest",
+    "bench",
+    "chart",
+    "docs",
     "ci",
     "deps",
-    "ai",
-    "docs"
+    "ai"
   ]
 }
