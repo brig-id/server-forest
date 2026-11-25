@@ -1,0 +1,24 @@
+[package]
+name = "forest-bench"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+rust-version = "1.94"
+
+# A measuring tool, not a part of the server: it plays the statements a
+# sign-in costs against a database filled to forest's tested maximum, to
+# compare where the short-lived state can live (spec `forest.md` §3).
+
+[dependencies]
+# The same driver as the store of `core`, in the same version.
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+redis = { version = "1", default-features = false, features = ["tokio-comp"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+hdrhistogram = { version = "7", default-features = false }
+md-5 = "0.11"
+rand = "0.9"
+
+[profile.release]
+debug = false

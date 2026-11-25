@@ -2,3 +2,6 @@
 .history
 # macOS
 .DS_Store
+
+# Build artifacts (CARGO_TARGET_DIR redirects to /cargo-target volume)
+target/
