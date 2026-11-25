@@ -132,6 +132,10 @@ What these figures are worth:
   second at the peak. Real traffic returns to the same accounts and writes less.
 - The tool and the database share one machine: the database had its processors to
   itself only as far as the container's limit holds.
+- Each write that must last waits once for the disk, about 4 ms on this machine, and a
+  sign-in makes several: the medians are mostly that, and are the same at a tenth of the
+  load. The statements are played one by one, as `core` issues them today; grouping a
+  request's writes in one transaction is not measured.
 
 What the design concludes from them is in
 [`forest.md`](https://github.com/brig-id/spec/blob/main/forest.md) §3.
