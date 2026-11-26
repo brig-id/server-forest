@@ -35,7 +35,7 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       cache:
-        image: valkey/valkey:8
+        image: valkey/valkey:9
         ports: ["6379:6379"]
     env:
       BENCH_DATABASE_URL: postgres://postgres:bench@localhost:5432/forest
