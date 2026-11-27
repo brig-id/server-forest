@@ -26,13 +26,13 @@ test "$(docker run --rm "$image" --version | cut -d' ' -f1)" = forest
 
 docker run -d --name "$name-pg" -e POSTGRES_PASSWORD=check -e POSTGRES_DB=forest \
   postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328 > /dev/null
+# Over the network, not the local socket: while the image creates the
+# database it runs a first server that listens on the socket only.
 for _ in $(seq 1 60); do
-  docker exec "$name-pg" pg_isready -q -U postgres -d forest && break
+  docker exec "$name-pg" pg_isready -q -h 127.0.0.1 -U postgres -d forest && break
   sleep 1
 done
-# The image's own start restarts PostgreSQL once: ask again after it.
-sleep 2
-docker exec "$name-pg" pg_isready -q -U postgres -d forest
+docker exec "$name-pg" pg_isready -q -h 127.0.0.1 -U postgres -d forest
 
 settings=(
   -e "BRIGID_MASTER_KEY=$key"

@@ -110,7 +110,10 @@ services:
       # Creates the role of the nodes when the database is created.
       - ./postgres/10-node-role.sh:/docker-entrypoint-initdb.d/10-node-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U forest_owner -d forest"]
+      # Over the network, not the local socket: while the image creates the
+      # database it runs a first server that listens on the socket only, and
+      # `init` would start before the real one accepts its connection.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U forest_owner -d forest"]
       interval: 5s
       timeout: 5s
       retries: 20

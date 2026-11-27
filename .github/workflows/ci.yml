@@ -275,8 +275,8 @@ jobs:
           # PostgreSQL database reached without TLS (written, as it must be).
           # As an ordinary user: forest refuses to run as root.
           docker run -d --name pg -e POSTGRES_PASSWORD=bare -e POSTGRES_DB=forest postgres:19
-          for _ in $(seq 1 60); do docker exec pg pg_isready -q -U postgres -d forest && break; sleep 1; done
-          sleep 2
+          # Over the network: the image first runs a server on its socket only.
+          for _ in $(seq 1 60); do docker exec pg pg_isready -q -h 127.0.0.1 -U postgres -d forest && break; sleep 1; done
           address=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
           settings=(
             -e BRIGID_MASTER_KEY=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
