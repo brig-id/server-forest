@@ -5,14 +5,353 @@ on:
     branches: [main, "dev/*"]
   pull_request:
     branches: [main, "dev/*"]
+  workflow_dispatch:
+  # The build of a release (release.yml): the same jobs, with the version of
+  # the tag about to be made written into what is built.
+  workflow_call:
+    inputs:
+      version:
+        description: The version being released (X.Y.Z); empty for an ordinary build.
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+env:
+  # The interface embedded in the server: brig-id/app at a commit of its main,
+  # so that two builds of the same server commit embed the same interface. The
+  # pull request that needs a newer interface moves it (the integration job
+  # refuses a commit that is not on the interface's main).
+  APP_REF: 00f9e0242e9be67ad55050a686cc5277f69d8f70
+
 jobs:
+  ci:
+    # Formatting, clippy, the tests that need no database. The ones that put
+    # nodes on PostgreSQL say so and pass here: `nodes` runs them.
+    uses: brig-id/.github/.github/workflows/ci-rust.yml@main
+    with:
+      working-directory: .
+
+  security:
+    uses: brig-id/.github/.github/workflows/security-audit.yml@main
+    with:
+      working-directory: .
+
+  # With a branch of the same name and an open pull request in the core or
+  # crypto, forest's tests run with it, on PostgreSQL, before anything is
+  # merged; and APP_REF is checked to be a commit of the interface's main
+  # (brig-id/.github, integration.yml). The suites in a browser run against
+  # seedling, the same server in another edition.
+  integration:
+    uses: brig-id/.github/.github/workflows/integration.yml@main
+    with:
+      heads: false
+      suites: tests
+
+  nodes:
+    # Real nodes, as processes, on a real database: a whole passkey sign-in
+    # spread over two of them, a node that waits for `forest init`, a signing
+    # key rotated without a restart, a single-node server imported. On the
+    # oldest and the newest PostgreSQL its project supports.
+    name: Nodes on PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["15", "19"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: forest
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BRIGID_TEST_POSTGRES: postgres://postgres:test@localhost:5432/forest
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-08-05
+        with:
+          toolchain: stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y mold
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Every test, the nodes on PostgreSQL
+        run: cargo nextest run --all-features
+        env:
+          CARGO_TARGET_DIR: /tmp/cargo-target
+
+  deployment:
+    # Its own job, not a reusable workflow of brig-id/.github: the production
+    # Dockerfile builds with the real interface (brig-id/app) embedded, the
+    # image is checked (scripts/check-image.sh), then deployed from
+    # deploy/compose.yaml and used: a person with a passkey in a real
+    # browser, an update node by node while requests keep coming, a node
+    # lost, the database crashed (tests/deploy/run.sh). Nothing is pushed.
+    name: Docker build, and the deployment used (compose file, a passkey)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # The browser of the test. Not a dependency of the repository: installed
+      # here only.
+      PLAYWRIGHT_VERSION: "1.62.1"
+    steps:
+      - name: Checkout server-forest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout app (Qwik UI)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: brig-id/app
+          ref: ${{ env.APP_REF }}
+          path: ui
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: brigid/forest:dev
+          cache-from: type=gha,scope=deployment
+          cache-to: type=gha,scope=deployment,mode=max
+
+      - name: The image initialises a database, and two nodes serve on it
+        run: scripts/check-image.sh brigid/forest:dev
+
+      - name: Playwright and Chromium
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libnss3-tools
+          dir="$RUNNER_TEMP/playwright"
+          mkdir -p "$dir"
+          npm install --prefix "$dir" --no-save --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          "$dir/node_modules/.bin/playwright" install --with-deps chromium
+          echo "PLAYWRIGHT_MODULE=$dir/node_modules/playwright" >> "$GITHUB_ENV"
+
+      - name: Deploy, sign up, update node by node, lose a node, crash the database
+        run: |
+          # The checkout of the interface is not part of the deployment.
+          rm -rf ui && git checkout -- ui
+          tests/deploy/run.sh
+
+  # -- The release: static binaries, and the image made of them -------------
+
+  ui:
+    # The interface, built once for both binaries.
+    name: Interface (brig-id/app)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: brig-id/app
+          ref: ${{ env.APP_REF }}
+          path: ui
+
+      - uses: helpers4/action/setup-pnpm@6fddd178620e7325d446a246c38a44f979569fc4 # main @ 2026-07-29
+        with:
+          node-version: "24"
+          working-directory: ui
+
+      - name: Build
+        working-directory: ui
+        env:
+          # In a release, the interface says the version of the server it is
+          # part of.
+          BRIGID_INTERFACE_VERSION: ${{ inputs.version }}
+        run: pnpm build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-dist
+          path: ui/dist/
+          if-no-files-found: error
+
+  binaries:
+    # Static (musl) executables, each built natively on its own
+    # architecture: they link nothing, so they run on any Linux, with or
+    # without a C library or OpenSSL (vendored, Cargo.toml).
+    name: Static binary (${{ matrix.arch }})
+    needs: ui
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            docker: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            docker: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+    steps:
+      - name: Checkout server-forest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ui-dist
+          path: ui-dist
+
+      - name: The version of the release
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/set-version.sh "$VERSION"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-08-05
+        with:
+          toolchain: stable
+          targets: ${{ env.TARGET }}
+
+      - name: Install the musl toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.arch }}-musl-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-musl-
+
+      - name: Build
+        env:
+          BRIGID_UI_DIST: ${{ github.workspace }}/ui-dist
+        run: |
+          export "CC_$(echo "$TARGET" | tr '-' '_')=musl-gcc"
+          cargo build --release --locked --target "$TARGET"
+          mkdir -p out
+          cp "target/$TARGET/release/forest" out/forest
+
+      - name: It is static, says its version, and runs where nothing else is
+        run: |
+          file out/forest
+          file out/forest | grep -Eq "static(-pie)? linked|statically linked"
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | sed -n 1p)
+          test "$(out/forest --version)" = "forest $version"
+          # Alpine: musl, and no OpenSSL. A node there answers, on a
+          # PostgreSQL database reached without TLS (written, as it must be).
+          # As an ordinary user: forest refuses to run as root.
+          docker run -d --name pg -e POSTGRES_PASSWORD=bare -e POSTGRES_DB=forest postgres:19
+          for _ in $(seq 1 60); do docker exec pg pg_isready -q -U postgres -d forest && break; sleep 1; done
+          sleep 2
+          address=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
+          settings=(
+            -e BRIGID_MASTER_KEY=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+            -e BRIGID_SERVER__DOMAIN=localhost -e BRIGID_SERVER__HOST=0.0.0.0
+            -e "BRIGID_DATABASE__URL=postgres://postgres:bare@$address:5432/forest?sslmode=disable"
+            -e BRIGID_DATABASE__ALLOW_UNVERIFIED=true
+          )
+          docker run --rm --user 65532:65532 -v "$PWD/out:/b:ro" "${settings[@]}" alpine:3.22 /b/forest init
+          docker run -d --name bare --user 65532:65532 -p 18080:8080 -v "$PWD/out:/b:ro" "${settings[@]}" \
+            alpine:3.22 /b/forest
+          for _ in $(seq 1 30); do curl -fsS http://localhost:18080/ready > /dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://localhost:18080/ready || { docker logs bare; exit 1; }
+          docker exec bare sh -c 'ls /usr/lib/libssl* /lib/libssl* 2>/dev/null' && { echo "OpenSSL is in the image after all"; exit 1; }
+          docker rm -f bare pg
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: forest-${{ matrix.docker }}
+          path: out/forest
+          if-no-files-found: error
+
+  image:
+    # The released image, made of the two binaries above: built on every
+    # change, so that a release never meets it for the first time.
+    name: Release image (from the static binaries)
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout server-forest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: forest-*
+          path: artifacts
+
+      - name: The build context
+        run: |
+          mkdir -p bin
+          for arch in amd64 arm64; do
+            cp "artifacts/forest-$arch/forest" "bin/forest-$arch"
+          done
+          ls -la bin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build (amd64, to run it)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64
+          load: true
+          tags: forest:release
+
+      - name: The image initialises a database, and two nodes serve on it
+        run: scripts/check-image.sh forest:release
+
+      - name: Build (both architectures)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: false
+
+  # -- The measuring tool -----------------------------------------------------
+
   bench:
-    # The measuring tool: formatted, without warnings, its tests green.
-    uses: brig-id/.github/.github/workflows/ci-rust.yml@9b4836cc447175b4345957d92c769d1774e36299
+    # Formatted, without warnings, its tests green.
+    uses: brig-id/.github/.github/workflows/ci-rust.yml@main
     with:
       working-directory: bench
 
