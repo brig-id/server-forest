@@ -24,6 +24,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 
 const RETRY_MS = 3500;
 
+/** The requests of the page and their answers, in order. */
+const exchanges = [];
+
 async function start() {
   const args = process.env.TEST_SPKI
     ? [`--ignore-certificate-errors-spki-list=${process.env.TEST_SPKI}`]
@@ -31,6 +34,20 @@ async function start() {
   const browser = await chromium.launch({ args });
   const context = await browser.newContext();
   const page = await context.newPage();
+  // What the page asked and what it was answered, said when a step fails:
+  // the pages themselves and their scripts apart.
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (/^\/(build|assets)\//.test(url.pathname)) return;
+    exchanges.push(`${response.status()} ${response.request().method()} ${url.pathname}`);
+  });
+  page.on("requestfailed", (request) => {
+    exchanges.push(`failed ${request.method()} ${new URL(request.url()).pathname}: ${request.failure()?.errorText}`);
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") exchanges.push(`console: ${message.text()}`);
+  });
+  page.on("pageerror", (error) => exchanges.push(`page error: ${error.message}`));
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable", { enableUI: false });
   const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -183,5 +200,9 @@ if (!run) {
 }
 run.catch((e) => {
   console.error(`✗ ${e.message}`);
+  if (exchanges.length > 0) {
+    console.error("  What the page asked last, and what it was answered:");
+    for (const line of exchanges.slice(-40)) console.error(`    ${line}`);
+  }
   process.exit(1);
 });
