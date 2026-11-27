@@ -194,3 +194,57 @@ async fn a_new_signing_key_reaches_the_nodes_without_a_restart() {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
+
+/// The first administrator comes from the setup link `forest init` printed:
+/// the ceremony begins on one node and ends on the other, as the role that
+/// cannot change the schema, and the link works once.
+#[tokio::test]
+async fn the_first_administrator_comes_from_the_setup_link_of_init() {
+    let Some(database) = Database::new().await else {
+        return;
+    };
+    let (role, as_node) = database.node_role().await;
+    let public_url = format!("http://localhost:{}", common::free_port());
+    let owner = Settings {
+        database: database.as_owner(),
+        public_url: public_url.clone(),
+    };
+    let nodes_settings = Settings {
+        database: as_node,
+        public_url: public_url.clone(),
+    };
+    let printed = owner.ok(&["init", "--grant", &role]);
+    let link = printed
+        .trim()
+        .strip_prefix(&format!("{public_url}/setup/#link="))
+        .unwrap_or_else(|| panic!("no setup link: {printed}"))
+        .to_owned();
+
+    let (first, second) = (nodes_settings.node(), nodes_settings.node());
+    first.ready().await;
+    second.ready().await;
+    let spread = Spread::over(&[&first, &second], &public_url);
+
+    // Without the link nobody signs up: the server takes accounts by
+    // invitation until someone says otherwise.
+    let resp = spread
+        .post("/auth/register/begin", None, serde_json::json!({}))
+        .await;
+    assert_ne!(resp.status(), 200);
+
+    let (_, cookie) = Person::sign_up_with(&spread, &public_url, Some(&link)).await;
+    onboard(&spread, &cookie).await;
+    let accounts = common::json_of(spread.get("/admin/accounts", Some(&cookie)).await).await;
+    assert_eq!(accounts.as_array().map(Vec::len), Some(1), "{accounts}");
+    assert_eq!(accounts[0]["admin"], true, "{accounts}");
+
+    // The link is spent.
+    let resp = spread
+        .post(
+            "/auth/register/begin",
+            None,
+            serde_json::json!({ "link": link }),
+        )
+        .await;
+    assert_ne!(resp.status(), 200);
+}

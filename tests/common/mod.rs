@@ -327,10 +327,25 @@ impl Person {
     /// Creates an account through `nodes` and returns the person with their
     /// session cookie. The server must take sign-ups (`forest signup open`).
     pub async fn sign_up(nodes: &Spread<'_>, public_url: &str) -> (Self, String) {
+        Self::sign_up_with(nodes, public_url, None).await
+    }
+
+    /// [`Self::sign_up`], with the link that allows it on a server that
+    /// asks for one: the setup link of the first administrator, an
+    /// invitation.
+    pub async fn sign_up_with(
+        nodes: &Spread<'_>,
+        public_url: &str,
+        link: Option<&str>,
+    ) -> (Self, String) {
         let origin = url::Url::parse(public_url).unwrap();
         let mut passkey = WebauthnAuthenticator::new(SoftPasskey::new(true));
-        let resp = nodes.post("/auth/register/begin", None, json!({})).await;
-        assert_eq!(resp.status(), 200);
+        let body = match link {
+            Some(link) => json!({ "link": link }),
+            None => json!({}),
+        };
+        let resp = nodes.post("/auth/register/begin", None, body).await;
+        assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
         let begin = json_of(resp).await;
         let mut challenge: CreationChallengeResponse =
             serde_json::from_value(begin["challenge"].clone()).unwrap();
@@ -359,7 +374,9 @@ impl Person {
                 json!({ "session_id": begin["session_id"], "credential": credential }),
             )
             .await;
-        assert_eq!(resp.status(), 204, "sign-up");
+        if resp.status() != 204 {
+            panic!("sign-up: {} {}", resp.status(), resp.text().await.unwrap());
+        }
         let cookie = session_cookie(&resp);
         (
             Self {
