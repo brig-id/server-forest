@@ -1,0 +1,12 @@
+# The deployment test (tests/deploy/run.sh) runs deploy/compose.yaml as it
+# is shipped, with this file on top. It changes one thing: the proxy serves
+# the certificate of brigid.localhost made by the test (a browser makes
+# passkeys only for a secure origin, and no authority gives a certificate to
+# a runner), on this machine only. Paths are relative to deploy/, the
+# directory of the first compose file.
+
+services:
+  proxy:
+    volumes:
+      - ../tests/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./secrets/tls/brigid.localhost:/certs:ro

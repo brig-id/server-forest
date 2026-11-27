@@ -1,0 +1,19 @@
+# What stands in front of the nodes of forest (deploy/compose.yaml): it
+# obtains and holds the certificate of the domain, and spreads the requests
+# over the nodes that say they are ready.
+#
+# - A node told to stop answers 503 on /ready first, then finishes its
+#   requests: the proxy has stopped sending it new ones by then.
+# - A request that cannot reach a node is given to the other one.
+# - Caddy replaces X-Forwarded-For with the address it was reached from: the
+#   nodes key their rate limits on it.
+{$BRIGID_DOMAIN} {
+	reverse_proxy forest-1:8080 forest-2:8080 {
+		lb_policy round_robin
+		lb_try_duration 5s
+		health_uri /ready
+		health_interval 1s
+		health_timeout 2s
+		fail_duration 5s
+	}
+}
