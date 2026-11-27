@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# brig·id forest — the released image
+#
+# The static binary of the release (built by the `binaries` job of
+# .github/workflows/ci.yml, the same file attached to the GitHub release),
+# and nothing else: no shell, no C library, no OpenSSL. The binary carries
+# the interface and links nothing. A node writes nothing to disk.
+#
+# The build context holds:
+#   bin/forest-amd64, bin/forest-arm64   the two binaries
+#
+#   docker buildx build -f Dockerfile.release --platform linux/amd64,linux/arm64 .
+#
+# Nothing runs in the image while it is built (COPY only), so an arm64 image
+# needs no emulation. To build the server from source instead: Dockerfile.
+# ---------------------------------------------------------------------------
+
+# distroless/static: certificates, /etc/passwd with nonroot, tzdata; no
+# libraries. Pinned to the multi-arch index digest (not one platform's: that
+# would put an amd64 base under an arm64 binary).
+FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+ARG TARGETARCH
+
+COPY --chmod=0755 bin/forest-${TARGETARCH} /forest
+
+USER nonroot:nonroot
+
+EXPOSE 8080
+
+# Liveness: the binary probes its own /health (there is no shell or curl).
+# What spreads requests over the nodes asks /ready instead.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["/forest", "healthcheck"]
+
+ENTRYPOINT ["/forest"]

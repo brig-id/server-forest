@@ -1,0 +1,18 @@
+# The proxy of the deployment test: deploy/Caddyfile with the certificate of
+# brigid.localhost made by tests/deploy/run.sh instead of one obtained from
+# an authority. What it does with the nodes is the same, word for word.
+{
+	auto_https off
+}
+
+https://{$BRIGID_DOMAIN} {
+	tls /certs/cert.pem /certs/key.pem
+	reverse_proxy forest-1:8080 forest-2:8080 {
+		lb_policy round_robin
+		lb_try_duration 5s
+		health_uri /ready
+		health_interval 1s
+		health_timeout 2s
+		fail_duration 5s
+	}
+}
