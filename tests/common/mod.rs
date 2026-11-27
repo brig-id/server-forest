@@ -18,7 +18,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
+use webauthn_authenticator_rs::{WebauthnAuthenticator as _, softpasskey::SoftPasskey};
 use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
 
 /// Fixed, valid-looking master key (32 bytes in hex).
@@ -317,7 +317,7 @@ pub fn session_cookie(resp: &reqwest::Response) -> String {
 /// registered (needed to answer a sign-in, since `SoftPasskey` keeps no
 /// discoverable credential).
 pub struct Person {
-    passkey: WebauthnAuthenticator<SoftPasskey>,
+    passkey: SoftPasskey,
     origin: url::Url,
     credential_id: String,
     account: Vec<u8>,
@@ -339,7 +339,7 @@ impl Person {
         link: Option<&str>,
     ) -> (Self, String) {
         let origin = url::Url::parse(public_url).unwrap();
-        let mut passkey = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let mut passkey = SoftPasskey::new(true);
         let body = match link {
             Some(link) => json!({ "link": link }),
             None => json!({}),
@@ -349,7 +349,7 @@ impl Person {
         let begin = json_of(resp).await;
         let mut challenge: CreationChallengeResponse =
             serde_json::from_value(begin["challenge"].clone()).unwrap();
-        let account: Vec<u8> = challenge.public_key.user.id.clone().into();
+        let account: Vec<u8> = challenge.public_key.user.id.clone();
         // The server asks for a discoverable passkey, which the software
         // one refuses: check the request, then relax it.
         let selection = challenge
@@ -405,7 +405,7 @@ impl Person {
             .passkey
             .do_authentication(self.origin.clone(), challenge)
             .expect("authentication ceremony");
-        answer.response.user_handle = Some(self.account.clone().into());
+        answer.response.user_handle = Some(self.account.clone());
         let resp = nodes
             .post(
                 "/auth/login/finish",
